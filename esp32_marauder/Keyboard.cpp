@@ -1,8 +1,63 @@
 #include "Keyboard.h"
 
-#ifdef MARAUDER_CARDPUTER
+#if defined(MARAUDER_CARDPUTER) || defined(MARAUDER_CARDPUTER_ADV)
 #include <driver/gpio.h>
 #include <Arduino.h>
+
+#ifdef HAS_TCA8418_KB
+// TCA8418 Register definitions
+#define TCA8418_REG_CFG          0x01
+#define TCA8418_REG_INT_STAT     0x02
+#define TCA8418_REG_KEY_LCK_EC   0x03
+#define TCA8418_REG_KEY_EVENT_A  0x04
+#define TCA8418_REG_KP_GPIO1     0x1D
+#define TCA8418_REG_KP_GPIO2     0x1E
+#define TCA8418_REG_KP_GPIO3     0x1F
+#define TCA8418_REG_GPIO_INT_EN1 0x1A
+#define TCA8418_REG_GPIO_INT_EN2 0x1B
+#define TCA8418_REG_GPIO_INT_EN3 0x1C
+#define TCA8418_REG_DEBOUNCE_DIS1 0x29
+#define TCA8418_REG_DEBOUNCE_DIS2 0x2A
+#define TCA8418_REG_DEBOUNCE_DIS3 0x2B
+
+static TwoWire* tca_wire = nullptr;
+static volatile bool tca_key_event = false;
+
+static void IRAM_ATTR _tca8418_isr_handler(void* arg) {
+    tca_key_event = true;
+}
+
+static uint8_t tca8418_read_reg(uint8_t reg) {
+    tca_wire->beginTransmission(TCA8418_I2C_ADDR);
+    tca_wire->write(reg);
+    tca_wire->endTransmission();
+    tca_wire->requestFrom((uint8_t)TCA8418_I2C_ADDR, (uint8_t)1);
+    return tca_wire->read();
+}
+
+static void tca8418_write_reg(uint8_t reg, uint8_t value) {
+    tca_wire->beginTransmission(TCA8418_I2C_ADDR);
+    tca_wire->write(reg);
+    tca_wire->write(value);
+    tca_wire->endTransmission();
+}
+
+// TCA8418 key code to coordinate mapping for Cardputer ADV
+// The TCA8418 returns key codes 1-80 for the 8x10 matrix
+static Point2D_t tca_keycode_to_coord(uint8_t keycode) {
+    Point2D_t coord = {-1, -1};
+    if (keycode == 0 || keycode > 80) return coord;
+
+    keycode--; // Convert to 0-based index
+    coord.x = keycode % 14;
+    coord.y = keycode / 14;
+    if (coord.y > 3) {
+        coord.x = -1;
+        coord.y = -1;
+    }
+    return coord;
+}
+#endif
 
 #define digitalWrite(pin, level) gpio_set_level((gpio_num_t)pin, level)
 #define digitalRead(pin) gpio_get_level((gpio_num_t)pin)
@@ -34,6 +89,36 @@ uint8_t Keyboard_Class::_get_input(const std::vector<int> &pinList)
 
 void Keyboard_Class::begin()
 {
+#ifdef HAS_TCA8418_KB
+    // Initialize I2C for TCA8418
+    tca_wire = &Wire;
+    tca_wire->begin(TCA8418_SDA_PIN, TCA8418_SCL_PIN);
+    tca_wire->setClock(400000);
+
+    // Configure TCA8418 for keyboard matrix
+    // Enable keypad functionality (KE_IEN = 1)
+    tca8418_write_reg(TCA8418_REG_CFG, 0x01);
+
+    // Configure rows and columns for keypad matrix
+    // ROW0-7 as rows, COL0-9 as columns
+    tca8418_write_reg(TCA8418_REG_KP_GPIO1, 0xFF); // R0-R7 as keypad
+    tca8418_write_reg(TCA8418_REG_KP_GPIO2, 0xFF); // C0-C7 as keypad
+    tca8418_write_reg(TCA8418_REG_KP_GPIO3, 0x03); // C8-C9 as keypad
+
+    // Clear any pending interrupts
+    tca8418_read_reg(TCA8418_REG_INT_STAT);
+
+    // Drain the FIFO
+    while (tca8418_read_reg(TCA8418_REG_KEY_LCK_EC) & 0x0F) {
+        tca8418_read_reg(TCA8418_REG_KEY_EVENT_A);
+    }
+
+    // Setup interrupt pin
+    pinMode(TCA8418_INT_PIN, INPUT);
+    attachInterruptArg(digitalPinToInterrupt(TCA8418_INT_PIN), _tca8418_isr_handler, nullptr, FALLING);
+
+    Serial.println("TCA8418 keyboard initialized");
+#else
     for (auto i : output_list)
     {
         gpio_reset_pin((gpio_num_t)i);
@@ -50,6 +135,7 @@ void Keyboard_Class::begin()
     }
 
     _set_output(output_list, 0);
+#endif
 }
 
 uint8_t Keyboard_Class::getKey(Point2D_t keyCoor)
@@ -76,6 +162,30 @@ void Keyboard_Class::updateKeyList()
 {
     _key_list_buffer.clear();
     Point2D_t coor;
+
+#ifdef HAS_TCA8418_KB
+    // Read key events from TCA8418 FIFO
+    uint8_t key_count = tca8418_read_reg(TCA8418_REG_KEY_LCK_EC) & 0x0F;
+
+    while (key_count > 0) {
+        uint8_t key_event = tca8418_read_reg(TCA8418_REG_KEY_EVENT_A);
+        uint8_t keycode = key_event & 0x7F;
+        bool pressed = (key_event & 0x80) != 0;
+
+        if (pressed && keycode > 0) {
+            coor = tca_keycode_to_coord(keycode);
+            if (coor.x >= 0 && coor.y >= 0) {
+                _key_list_buffer.push_back(coor);
+            }
+        }
+
+        key_count = tca8418_read_reg(TCA8418_REG_KEY_LCK_EC) & 0x0F;
+    }
+
+    // Clear interrupt
+    tca8418_write_reg(TCA8418_REG_INT_STAT, 0x0F);
+    tca_key_event = false;
+#else
     uint8_t input_value = 0;
 
     for (int i = 0; i < 8; i++)
@@ -106,6 +216,7 @@ void Keyboard_Class::updateKeyList()
             }
         }
     }
+#endif
 }
 
 uint8_t Keyboard_Class::isPressed()

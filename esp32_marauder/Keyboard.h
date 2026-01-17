@@ -5,7 +5,7 @@
 
 #include "configs.h"
 
-#ifdef MARAUDER_CARDPUTER
+#if defined(MARAUDER_CARDPUTER) || defined(MARAUDER_CARDPUTER_ADV)
 
 /**
  * @file keyboard.h
@@ -22,6 +22,10 @@
 #include "Arduino.h"
 #include "Keyboard_def.h"
 #include "configs.h"
+
+#ifdef HAS_TCA8418_KB
+#include <Wire.h>
+#endif
 
 struct Chart_t
 {
