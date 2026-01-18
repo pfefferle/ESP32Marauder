@@ -203,6 +203,7 @@ void MenuFunctions::main(uint32_t currentTime)
     {
       // Stop the current scan
       if ((wifi_scan_obj.currentScanMode == WIFI_SCAN_PROBE) ||
+          (wifi_scan_obj.currentScanMode == WIFI_SCAN_SAE_COMMIT) ||
           (wifi_scan_obj.currentScanMode == WIFI_SCAN_DETECT_FOLLOW) ||
           (wifi_scan_obj.currentScanMode == WIFI_SCAN_STATION_WAR_DRIVE) ||
           (wifi_scan_obj.currentScanMode == WIFI_SCAN_STATION) ||
@@ -301,6 +302,7 @@ void MenuFunctions::main(uint32_t currentTime)
       {
         // Stop the current scan
         if ((wifi_scan_obj.currentScanMode == WIFI_SCAN_PROBE) ||
+            (wifi_scan_obj.currentScanMode == WIFI_SCAN_SAE_COMMIT) ||
             (wifi_scan_obj.currentScanMode == WIFI_SCAN_DETECT_FOLLOW) ||
             (wifi_scan_obj.currentScanMode == WIFI_SCAN_STATION_WAR_DRIVE) ||
             (wifi_scan_obj.currentScanMode == WIFI_SCAN_RAW_CAPTURE) ||
@@ -1676,6 +1678,11 @@ void MenuFunctions::RunSetup()
     this->drawStatusBar();
     wifi_scan_obj.StartScan(WIFI_SCAN_DETECT_FOLLOW, TFT_MAGENTA);
   });
+  this->addNodes(&wifiSnifferMenu, "SAE Commit", TFTLIME, NULL, EAPOL, [this]() {
+    display_obj.clearScreen();
+    this->drawStatusBar();
+    wifi_scan_obj.StartScan(WIFI_SCAN_SAE_COMMIT, TFT_GREEN);
+  });
 
   // Build Wardriving menu
   #ifdef HAS_GPS
@@ -2424,11 +2431,6 @@ void MenuFunctions::RunSetup()
         display_obj.clearScreen();
         this->drawStatusBar();
         wifi_scan_obj.StartScan(BT_SCAN_WAR_DRIVE, TFT_GREEN);
-      });
-      this->addNodes(&bluetoothSnifferMenu, "BT Wardrive Continuous", TFTRED, NULL, REBOOT, [this]() {
-        display_obj.clearScreen();
-        this->drawStatusBar();
-        wifi_scan_obj.StartScan(BT_SCAN_WAR_DRIVE_CONT, TFT_GREEN);
       });
     }
   #endif
